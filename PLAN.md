@@ -116,7 +116,7 @@ unaffected. Target browser is Firefox 156 (user's version, 2026-09-24), which su
 - Presentation: loose-only matches get a dashed underline on top of the normal highlight;
   the counter's tooltip gives the exact/loose breakdown.
 
-### Phase 4 — Ctrl+F reaches the transcript first  🔨 built 2026-09-24, awaiting verification
+### Phase 4 — Ctrl+F reaches the transcript first  ✅ verified 2026-09-24
 Decision (2026-09-24): **DOM reorder.** Native Ctrl+F stays untouched; users are never
 forced into our search box.
 Confirmed layout: both implementations mount the panel in
@@ -132,6 +132,10 @@ Implementation: `layout.update()` in `src/content.js` moves `#secondary` only wh
 panel is open AND `ytd-watch-flexy[is-two-columns_]` is set (stacked narrow layout is left
 alone), restores otherwise, and re-runs every search afterwards because moving a subtree
 collapses the highlight Ranges inside it.
+Paint-order gotcha: with `#primary` later in the DOM, its ambient-glow canvas
+(`#cinematics-full-bleed-container`) painted over the transcript. Fixed with `z-index: 1`
+on `#secondary` as a flex item. `position: relative` must NOT be added: it activates a
+YouTube offset rule that pushes the column off-screen.
 Rejected: intercepting Ctrl+F to focus our toolbar. Not tried: the selection trick.
 
 ### Later / out of scope for now

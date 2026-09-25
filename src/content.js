@@ -6,7 +6,7 @@
   "use strict";
 
   const TAG = "[Transcript Helper]";
-  const DEBUG = true;
+  const DEBUG = false; // set true for verbose console output
   const log = (...args) => console.log(TAG, ...args);
   const debug = (...args) => DEBUG && console.log(TAG, ...args);
 
