@@ -4,6 +4,25 @@
   display: none !important;
 }
 
+/* Theme tokens. YouTube's own --yt-spec-* variables do not resolve inside the panel,
+   so key off the `dark` attribute YouTube sets on <html>. */
+.th-toolbar {
+  --th-fg: #0f0f0f;
+  --th-fg-muted: #606060;
+  --th-field-bg: rgba(0, 0, 0, 0.05);
+  --th-hover-bg: rgba(0, 0, 0, 0.1);
+  --th-focus: #065fd4;
+  --th-error: #c00;
+}
+html[dark] .th-toolbar {
+  --th-fg: #f1f1f1;
+  --th-fg-muted: #aaaaaa;
+  --th-field-bg: rgba(255, 255, 255, 0.1);
+  --th-hover-bg: rgba(255, 255, 255, 0.2);
+  --th-focus: #3ea6ff;
+  --th-error: #ff6b6b;
+}
+
 /* Toolbar */
 .th-toolbar {
   display: flex;
@@ -13,7 +32,7 @@
   width: 100%;
   padding: 8px 12px 8px 16px;
   font-family: "Roboto", "Arial", sans-serif;
-  color: var(--yt-spec-text-primary, #0f0f0f);
+  color: var(--th-fg);
 }
 
 .th-input {
@@ -23,25 +42,26 @@
   padding: 0 14px;
   border: 1px solid transparent;
   border-radius: 18px;
-  background: var(--yt-spec-badge-chip-background, rgba(0, 0, 0, 0.05));
-  color: inherit;
+  background: var(--th-field-bg);
+  color: var(--th-fg);
   font: 400 1.4rem/1 "Roboto", "Arial", sans-serif;
   outline: none;
 }
 .th-input::placeholder {
-  color: var(--yt-spec-text-secondary, #606060);
+  color: var(--th-fg-muted);
+  opacity: 1;
 }
 .th-input:focus {
-  border-color: var(--yt-spec-call-to-action, #065fd4);
+  border-color: var(--th-focus);
 }
 .th-no-matches .th-input {
-  border-color: var(--yt-spec-error-indicator, #c00);
+  border-color: var(--th-error);
 }
 
 .th-count {
   flex: 0 0 auto;
   margin: 0 4px;
-  color: var(--yt-spec-text-secondary, #606060);
+  color: var(--th-fg-muted);
   font-size: 1.2rem;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -59,12 +79,12 @@
   border: none;
   border-radius: 50%;
   background: transparent;
-  color: var(--yt-spec-text-primary, #0f0f0f);
+  color: var(--th-fg);
   cursor: pointer;
 }
 .th-prev:hover,
 .th-next:hover {
-  background: var(--yt-spec-badge-chip-background, rgba(0, 0, 0, 0.05));
+  background: var(--th-hover-bg);
 }
 
 /* Match highlighting (CSS Custom Highlight API) */
@@ -74,6 +94,12 @@
 ::highlight(th-current) {
   background-color: #ff8c00;
   color: #000;
+}
+/* Matches that only hold when punctuation is ignored. Stacks on the two above. */
+::highlight(th-loose) {
+  text-decoration: underline dashed;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
 }
 
 /* <mark> fallback when the Highlight API is unavailable */
@@ -85,4 +111,9 @@ mark.th-mark {
 mark.th-mark.th-current {
   background-color: #ff8c00;
   color: #000;
+}
+mark.th-mark.th-loose {
+  text-decoration: underline dashed;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
 }

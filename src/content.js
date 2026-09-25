@@ -67,35 +67,37 @@
   const HAS_HIGHLIGHT_API = typeof Highlight === "function" && typeof CSS !== "undefined" && !!CSS.highlights;
   if (!HAS_HIGHLIGHT_API) log("CSS Custom Highlight API unavailable; using <mark> fallback");
 
+  // Highlight names are page-global, and YouTube can render the same transcript panel
+  // twice (one per layout), so highlighting is one page-level step that merges the
+  // matches of every controller rather than something each controller owns.
   const highlighter = HAS_HIGHLIGHT_API
     ? {
-        apply(matches, currentIndex) {
-          const all = [];
-          const current = [];
-          matches.forEach((m, i) => (i === currentIndex ? current : all).push(...m.ranges));
-          const hl = new Highlight(...all);
-          const cur = new Highlight(...current);
+        apply(jobs) {
+          const pick = (pred) => new Highlight(...jobs.filter(pred).map((j) => j.range));
+          const all = pick((j) => !j.current);
+          const cur = pick((j) => j.current);
+          const loose = pick((j) => !j.exact); // stacks on top: adds the dashed underline
           cur.priority = 1;
-          CSS.highlights.set("th-match", hl);
+          loose.priority = 2;
+          CSS.highlights.set("th-match", all);
           CSS.highlights.set("th-current", cur);
+          CSS.highlights.set("th-loose", loose);
         },
         clear() {
-          CSS.highlights.delete("th-match");
-          CSS.highlights.delete("th-current");
+          for (const name of ["th-match", "th-current", "th-loose"]) CSS.highlights.delete(name);
         },
       }
     : {
         marks: [],
-        apply(matches, currentIndex) {
+        apply(jobs) {
           this.clear();
           // Wrap back-to-front so earlier ranges' offsets stay valid.
-          const jobs = [];
-          matches.forEach((m, i) => m.ranges.forEach((r) => jobs.push({ r, current: i === currentIndex })));
-          for (let i = jobs.length - 1; i >= 0; i--) {
+          const ordered = [...jobs].sort((a, b) => a.range.compareBoundaryPoints(Range.START_TO_START, b.range));
+          for (let i = ordered.length - 1; i >= 0; i--) {
             const mark = document.createElement("mark");
-            mark.className = "th-mark" + (jobs[i].current ? " th-current" : "");
+            mark.className = "th-mark" + (ordered[i].current ? " th-current" : "") + (ordered[i].exact ? "" : " th-loose");
             try {
-              jobs[i].r.surroundContents(mark);
+              ordered[i].range.surroundContents(mark);
               this.marks.push(mark);
             } catch (e) {
               debug("could not wrap range", e);
@@ -113,6 +115,19 @@
           this.marks = [];
         },
       };
+
+  const controllers = new Map(); // panel element -> TranscriptPanel
+
+  function refreshHighlights() {
+    const jobs = [];
+    for (const ctl of controllers.values()) {
+      ctl.matches.forEach((m, i) =>
+        m.ranges.forEach((range) => jobs.push({ range, current: i === ctl.current, exact: m.exact }))
+      );
+    }
+    if (jobs.length) highlighter.apply(jobs);
+    else highlighter.clear();
+  }
 
   // ---------------------------------------------------------------------------
   // One controller per transcript panel.
@@ -146,7 +161,9 @@
         }, 150);
       });
       this.observer.observe(this.panel, { subtree: true, childList: true, characterData: true });
-      log(`${this.impl.name} panel mounted`);
+      const copies = [...document.querySelectorAll(this.impl.panel)];
+      log(`${this.impl.name} panel mounted (copy ${copies.indexOf(this.panel) + 1} of ${copies.length}) at`,
+        ancestorChain(this.panel.parentElement));
     }
 
     buildToolbar() {
@@ -211,7 +228,9 @@
     }
 
     rebuild() {
-      highlighter.clear();
+      // Drop ranges into nodes that may be gone before the new index is built.
+      this.matches = [];
+      refreshHighlights();
       this.index = new TranscriptIndex(this.collectSegments());
       debug(`index rebuilt: ${this.index.segments.length} segments, ${this.index.raw.length} chars`);
       this.runQuery({ scroll: false });
@@ -237,15 +256,18 @@
     }
 
     render() {
+      refreshHighlights();
       if (!this.matches.length) {
-        highlighter.clear();
         this.count.textContent = this.query.trim() ? "No matches" : "";
         this.toolbar.classList.toggle("th-no-matches", !!this.query.trim());
         return;
       }
       this.toolbar.classList.remove("th-no-matches");
-      highlighter.apply(this.matches, this.current);
       this.count.textContent = `${this.current + 1} / ${this.matches.length}`;
+      const loose = this.matches.filter((m) => !m.exact).length;
+      this.count.title = loose
+        ? `${this.matches.length - loose} exact, ${loose} ignoring punctuation (dashed underline)`
+        : "";
     }
 
     scrollToCurrent() {
@@ -273,16 +295,15 @@
 
     destroy() {
       this.observer?.disconnect();
-      highlighter.clear();
+      this.matches = [];
       this.toolbar.remove();
+      refreshHighlights();
     }
   }
 
   // ---------------------------------------------------------------------------
   // Discovery
   // ---------------------------------------------------------------------------
-
-  const controllers = new Map(); // panel element -> TranscriptPanel
 
   function scan() {
     if (!isWatchPage()) return;

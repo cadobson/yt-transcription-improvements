@@ -26,10 +26,17 @@ extension supports both through a selector table (`IMPLS` in `src/content.js`).
 - No shadow DOM anywhere in this tree, so normal selectors and observers work.
 - Seeking: keep YouTube's own click handler by never replacing item elements.
 
-### Classic (fallback, unverified this session)
+### Classic (used for videos WITH chapters — confirmed 2026-09-24)
+- YouTube picks the implementation per video: videos with chapters get the classic
+  "In this video" panel (Chapters / Transcript tabs); videos without chapters get modern.
 - Panel: `...[target-id="engagement-panel-searchable-transcript"]`, segments
   `ytd-transcript-segment-renderer` with `.segment-timestamp` / `.segment-text`, active
-  class `active`, search box `ytd-transcript-search-box-renderer`.
+  class `active`, search box `ytd-transcript-search-box-renderer`, chapter headings
+  `ytd-transcript-section-header-renderer` between segments.
+- YouTube renders this panel **twice** (both copies fully populated, one expanded), most
+  likely one per layout. Consequences: highlighting is page-global and merges all
+  controllers; the two toolbars do not share query state yet (see Later); Phase 4's
+  reorder must handle both copies.
 
 ### Shared
 - YouTube is a single-page app. Navigating to another video fires `yt-navigate-finish` and
@@ -72,7 +79,7 @@ unaffected. Target browser is Firefox 156 (user's version, 2026-09-24), which su
 
 ## Phases
 
-### Phase 0 — Minimum viable extension  (verify: it installs and visibly changes the panel)
+### Phase 0 — Minimum viable extension  ✅ verified 2026-09-24
 - Scaffold manifest, content script, CSS, icon.
 - Content script waits for the transcript panel, then adds a visible marker: a coloured
   border on the panel and a small "Transcript Helper" badge in its header.
@@ -82,7 +89,7 @@ unaffected. Target browser is Firefox 156 (user's version, 2026-09-24), which su
   clicking "Show transcript"; badge survives navigating to another video; console shows
   the probe output (paste it back so selectors can be corrected).
 
-### Phase 1 — Own search toolbar with in-context highlighting and next/previous
+### Phase 1 — Own search toolbar with in-context highlighting and next/previous  ✅ verified 2026-09-24
 - Hide YouTube's search box; inject our toolbar: text input, "n / total" counter,
   previous and next buttons. Enter = next, Shift+Enter = previous, Esc = clear.
 - Matching segments are highlighted in place; nothing is hidden. Current match gets a
@@ -90,28 +97,41 @@ unaffected. Target browser is Firefox 156 (user's version, 2026-09-24), which su
 - Clicking a highlighted segment still seeks the video (YouTube's handler untouched).
 - Search runs against the joined index from the start, so Phase 2 is mostly verification.
 
-### Phase 2 — Matches that straddle segments
+### Phase 2 — Matches that straddle segments  ✅ verified 2026-09-24 (incl. across chapter headings)
 - Verify and fix cases where the query crosses a segment boundary: highlight the tail of
   one segment and the head of the next as one match; next/previous treats it as one hit;
   clicking either segment seeks normally.
 - Edge cases: chapter headers between segments, queries spanning three or more segments,
   double spaces / line breaks inside segment text.
 
-### Phase 3 — Punctuation-insensitive search
+### Phase 3 — Punctuation-insensitive search  🔨 built 2026-09-24, awaiting verification
 - Add normalized matching (commas first; configurable set of punctuation).
 - Present both result kinds: exact matches and punctuation-insensitive matches in one
   merged, ordered list, visually distinguished (e.g. solid vs. dashed underline / different
   tint), with the counter covering both. Decided 2026-09-24.
 - Ignored punctuation: commas, periods, question marks, exclamation marks, colons,
-  semicolons, quotes, apostrophes, dashes, parentheses, ellipses. Decided 2026-09-24.
+  semicolons, quotes, apostrophes, dashes, parentheses, brackets, ellipses. Decided
+  2026-09-24. Rule: apostrophes are dropped ("don't" = "dont"); every other mark counts
+  as whitespace ("follow-up" = "follow up", "China. And" = "China And").
+- Presentation: loose-only matches get a dashed underline on top of the normal highlight;
+  the counter's tooltip gives the exact/loose breakdown.
 
 ### Phase 4 — Ctrl+F reaches the transcript first
-Decision (2026-09-24): **DOM reorder.** Move the engagement panel element earlier in the
-DOM (before `#primary`) and keep its visual position with CSS, in both default and theater
-layouts. Native Ctrl+F stays untouched; users are never forced into our search box.
+Decision (2026-09-24): **DOM reorder.** Native Ctrl+F stays untouched; users are never
+forced into our search box.
+Confirmed layout: both implementations mount the panel in
+`ytd-watch-flexy > #columns > #secondary > #secondary-inner > #panels`, and `#columns`
+holds `#primary` (player, description, comments) before `#secondary`. Plan: move
+`#secondary` before `#primary` inside `#columns` while the transcript is open, and restore
+the visual order with CSS `order` on the two columns (flex `order` works in both the
+side-by-side and the stacked theater layout). Find-in-page then visits the transcript
+(and the related-videos list, which shares `#secondary`) before the primary column.
+Open question: the census showed a second classic panel copy; find where it lives before
+moving anything.
 Rejected: intercepting Ctrl+F to focus our toolbar. Not tried: the selection trick.
 
 ### Later / out of scope for now
+- Share the search query between duplicate panel copies (classic renders two).
 - Auto-open the transcript panel on every video.
 - Keyboard shortcut to focus the transcript search.
 - Support for youtube.com/embed, m.youtube.com, YouTube Music.
