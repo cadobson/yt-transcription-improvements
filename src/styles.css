@@ -1,0 +1,22 @@
+/* Phase 0: visible proof that the extension found the transcript panel. */
+
+ytd-engagement-panel-section-list-renderer[data-th-active] {
+  position: relative;
+  outline: 3px solid #d0342c;
+  outline-offset: -3px;
+  border-radius: 12px;
+}
+
+.th-badge {
+  position: absolute;
+  top: 8px;
+  right: 56px;
+  z-index: 10;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #d0342c;
+  color: #fff;
+  font: 600 11px/16px Roboto, Arial, sans-serif;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
