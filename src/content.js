@@ -7,6 +7,7 @@
 
   const TAG = "[Transcript Helper]";
   const DEBUG = false; // set true for verbose console output
+  const REORDER_FOR_FIND = true; // set false to disable the Ctrl+F column reorder (Phase 4)
   const log = (...args) => console.log(TAG, ...args);
   const debug = (...args) => DEBUG && console.log(TAG, ...args);
 
@@ -143,13 +144,23 @@
       this.query = "";
       this.rebuildTimer = null;
       this.searchTimer = null;
+      // Follow-playback state (our replacement for YouTube's broken "Sync to video time").
+      this.follow = true;
+      this.activeIndex = -1;
+      this.boundScroller = null;
     }
 
     mount() {
       this.panel.setAttribute("data-th-active", this.impl.name);
       this.buildToolbar();
+      this.buildSyncButton();
       this.mountToolbar();
       this.rebuild();
+
+      // Clicking a fragment seeks the video (YouTube's handler); resume following it.
+      this.panel.addEventListener("click", (e) => {
+        if (e.target.closest(this.impl.item)) this.setFollow(true);
+      });
 
       this.observer = new MutationObserver((records) => {
         // Ignore mutations we caused ourselves inside the toolbar.
@@ -157,13 +168,17 @@
         clearTimeout(this.rebuildTimer);
         this.rebuildTimer = setTimeout(() => {
           if (!this.toolbar.isConnected) this.mountToolbar();
+          if (!this.syncButton.isConnected) this.panel.appendChild(this.syncButton);
           this.rebuild();
         }, 150);
       });
       this.observer.observe(this.panel, { subtree: true, childList: true, characterData: true });
 
-      // Opening/closing the panel drives the Ctrl+F column reorder.
-      this.visibilityObserver = new MutationObserver(() => layout.update());
+      // Opening/closing the panel drives the Ctrl+F column reorder and a re-sync.
+      this.visibilityObserver = new MutationObserver(() => {
+        layout.update();
+        if (this.isOpen() && this.follow) this.keepActiveInView(true);
+      });
       this.visibilityObserver.observe(this.panel, { attributes: true, attributeFilter: ["visibility"] });
       const copies = [...document.querySelectorAll(this.impl.panel)];
       log(`${this.impl.name} panel mounted (copy ${copies.indexOf(this.panel) + 1} of ${copies.length}) at`,
@@ -211,6 +226,90 @@
       bar.querySelector(".th-next").addEventListener("click", () => this.step(1));
     }
 
+    buildSyncButton() {
+      const btn = document.createElement("button");
+      btn.className = "th-sync";
+      btn.type = "button";
+      btn.hidden = true;
+      btn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 4V1L8 5l4 4V6a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>
+        <span>Sync to video time</span>`;
+      btn.addEventListener("click", () => this.setFollow(true));
+      this.syncButton = btn;
+      this.panel.appendChild(btn);
+    }
+
+    /** Wire user-scroll detection to the list's scroll container (found lazily). */
+    bindScroller() {
+      const container = this.scrollContainerOfPanel();
+      if (!container || container === this.boundScroller) return;
+      this.boundScroller = container;
+      const userScrolled = (e) => {
+        if (this.toolbar.contains(e.target)) return;
+        this.setFollow(false);
+      };
+      // Programmatic scrolls fire none of these, so they are a clean "user intent" signal.
+      container.addEventListener("wheel", userScrolled, { passive: true });
+      container.addEventListener("touchstart", userScrolled, { passive: true });
+      container.addEventListener("mousedown", userScrolled, { passive: true });
+      container.addEventListener("keydown", (e) => {
+        if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"].includes(e.key)) userScrolled(e);
+      });
+    }
+
+    setFollow(on) {
+      this.follow = on;
+      this.syncButton.hidden = on;
+      if (on) this.keepActiveInView(true);
+    }
+
+    /** Called on every video timeupdate with the current playback time in seconds. */
+    onTime(t) {
+      if (!this.index) return;
+      const segs = this.index.segments;
+      let idx = -1;
+      for (let i = 0; i < segs.length; i++) {
+        if (segs[i].time == null) continue;
+        if (segs[i].time <= t) idx = i;
+        else break;
+      }
+      if (idx === this.activeIndex) return;
+      this.activeIndex = idx;
+      if (this.follow && this.isOpen()) this.keepActiveInView(false);
+    }
+
+    /**
+     * Scroll so the active fragment is comfortably visible. With `force`, always centre it;
+     * otherwise leave the list alone while the fragment sits in the middle band, so the
+     * view does not creep on every fragment change.
+     */
+    keepActiveInView(force) {
+      const seg = this.index?.segments[this.activeIndex];
+      if (!seg) return;
+      const container = this.scrollContainer(seg.item);
+      if (!container) return;
+      const cr = container.getBoundingClientRect();
+      const ir = seg.item.getBoundingClientRect();
+      // The sticky header (which holds our toolbar) covers the top of the scroll area.
+      const header = this.toolbar.isConnected ? this.toolbar.parentElement.getBoundingClientRect() : null;
+      const top = header && header.bottom > cr.top && header.top < cr.bottom ? header.bottom : cr.top;
+      const bandTop = top + (cr.bottom - top) * 0.1;
+      const bandBottom = cr.bottom - (cr.bottom - top) * 0.25;
+      if (!force && ir.top >= bandTop && ir.bottom <= bandBottom) return;
+      this.centerItem(seg.item, container);
+    }
+
+    centerItem(item, container = this.scrollContainer(item)) {
+      if (!container) {
+        item.scrollIntoView({ block: "center", behavior: "smooth" });
+        return;
+      }
+      const cr = container.getBoundingClientRect();
+      const ir = item.getBoundingClientRect();
+      const top = container.scrollTop + (ir.top - cr.top) - (cr.height - ir.height) / 2;
+      container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    }
+
     mountToolbar() {
       const box = this.panel.querySelector(this.impl.searchBox);
       if (box) {
@@ -226,7 +325,8 @@
       for (const seg of this.panel.querySelectorAll(this.impl.segment)) {
         const textEl = seg.querySelector(this.impl.text);
         if (!textEl) continue;
-        segs.push({ item: seg.closest(this.impl.item) || seg, textEl });
+        const time = parseTimestamp(seg.querySelector(this.impl.timestamp)?.textContent);
+        segs.push({ item: seg.closest(this.impl.item) || seg, textEl, time });
       }
       return segs;
     }
@@ -238,6 +338,10 @@
       this.index = new TranscriptIndex(this.collectSegments());
       debug(`index rebuilt: ${this.index.segments.length} segments, ${this.index.raw.length} chars`);
       this.runQuery({ scroll: false });
+      this.bindScroller();
+      this.activeIndex = -1;
+      const video = document.querySelector("video.html5-main-video");
+      if (video) this.onTime(video.currentTime);
     }
 
     search(query) {
@@ -277,16 +381,14 @@
     scrollToCurrent() {
       const m = this.matches[this.current];
       if (!m) return;
-      const item = this.index.segments[m.segIndices[0]].item;
-      const container = this.scrollContainer(item);
-      if (!container) {
-        item.scrollIntoView({ block: "center", behavior: "smooth" });
-        return;
-      }
-      const cr = container.getBoundingClientRect();
-      const ir = item.getBoundingClientRect();
-      const top = container.scrollTop + (ir.top - cr.top) - (cr.height - ir.height) / 2;
-      container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+      // Reading a match and having playback yank the list away would be hostile.
+      this.setFollowQuietly(false);
+      this.centerItem(this.index.segments[m.segIndices[0]].item);
+    }
+
+    setFollowQuietly(on) {
+      this.follow = on;
+      this.syncButton.hidden = on;
     }
 
     scrollContainerOfPanel() {
@@ -311,8 +413,33 @@
       this.visibilityObserver?.disconnect();
       this.matches = [];
       this.toolbar.remove();
+      this.syncButton.remove();
       refreshHighlights();
     }
+  }
+
+  /** "1:02:03" -> 3723, "0:16" -> 16, anything else -> null. */
+  function parseTimestamp(text) {
+    const parts = (text || "").trim().split(":");
+    if (!parts.length || parts.some((p) => !/^\d+$/.test(p))) return null;
+    return parts.reduce((acc, p) => acc * 60 + parseInt(p, 10), 0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Playback tracking: one listener on the <video>, fanned out to every controller.
+  // ---------------------------------------------------------------------------
+
+  let trackedVideo = null;
+  function trackVideo() {
+    const video = document.querySelector("video.html5-main-video");
+    if (!video || video === trackedVideo) return;
+    trackedVideo = video;
+    const tick = () => {
+      for (const c of controllers.values()) c.onTime(video.currentTime);
+    };
+    video.addEventListener("timeupdate", tick);
+    video.addEventListener("seeked", tick);
+    debug("tracking video element");
   }
 
   // ---------------------------------------------------------------------------
@@ -341,7 +468,7 @@
 
       const transcriptOpen = [...controllers.values()].some((c) => c.isOpen());
       const twoColumns = flexy.hasAttribute("is-two-columns_");
-      const want = isWatchPage() && transcriptOpen && twoColumns;
+      const want = REORDER_FOR_FIND && isWatchPage() && transcriptOpen && twoColumns;
       const secondaryFirst = !!(secondary.compareDocumentPosition(primary) & Node.DOCUMENT_POSITION_FOLLOWING);
       if (want === secondaryFirst) return;
 
@@ -394,6 +521,7 @@
     }
     layout.update();
     watchFlexy();
+    trackVideo();
   }
 
   // Layout mode changes (two-column vs stacked, theater) are attributes on ytd-watch-flexy.

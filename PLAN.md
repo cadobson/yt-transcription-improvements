@@ -138,6 +138,18 @@ on `#secondary` as a flex item. `position: relative` must NOT be added: it activ
 YouTube offset rule that pushes the column off-screen.
 Rejected: intercepting Ctrl+F to focus our toolbar. Not tried: the selection trick.
 
+### Phase 5 — Follow playback ("Sync to video time")  🔨 built 2026-09-24, awaiting verification
+YouTube's own sync button does nothing (confirmed with the extension disabled), and on
+chaptered videos it never appears. Ours:
+- The active fragment is computed from the `<video>` element's `timeupdate` and the
+  fragment timestamps, not from YouTube's active marker.
+- Follow mode is on by default and keeps the active fragment inside the middle band of the
+  list (no scroll while it is already comfortably visible, centre it otherwise).
+- Wheel, touch, mousedown or arrow/page keys on the list, or stepping to a search match,
+  turn follow off and show our "Sync to video time" button (bottom centre of the panel).
+  Clicking it, or clicking any fragment, turns follow back on.
+- YouTube's sync button container (`.ytSectionListRendererSyncContainer`) is hidden.
+
 ### Later / out of scope for now
 - Share the search query between duplicate panel copies (classic renders two).
 - Auto-open the transcript panel on every video.

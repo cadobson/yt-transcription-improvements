@@ -4,23 +4,37 @@
   display: none !important;
 }
 
+/* Hide YouTube's "Sync to video time" button; it does nothing, and we provide our own. */
+[data-th-active] .ytSectionListRendererSyncContainer {
+  display: none !important;
+}
+
+/* Anchor for our absolutely positioned sync button. */
+[data-th-active] {
+  position: relative;
+}
+
 /* Theme tokens. YouTube's own --yt-spec-* variables do not resolve inside the panel,
    so key off the `dark` attribute YouTube sets on <html>. */
-.th-toolbar {
+[data-th-active] {
   --th-fg: #0f0f0f;
   --th-fg-muted: #606060;
   --th-field-bg: rgba(0, 0, 0, 0.05);
   --th-hover-bg: rgba(0, 0, 0, 0.1);
   --th-focus: #065fd4;
   --th-error: #c00;
+  --th-sync-bg: #0f0f0f;
+  --th-sync-fg: #ffffff;
 }
-html[dark] .th-toolbar {
+html[dark] [data-th-active] {
   --th-fg: #f1f1f1;
   --th-fg-muted: #aaaaaa;
   --th-field-bg: rgba(255, 255, 255, 0.1);
   --th-hover-bg: rgba(255, 255, 255, 0.2);
   --th-focus: #3ea6ff;
   --th-error: #ff6b6b;
+  --th-sync-bg: #f1f1f1;
+  --th-sync-fg: #0f0f0f;
 }
 
 /* Toolbar */
@@ -85,6 +99,34 @@ html[dark] .th-toolbar {
 .th-prev:hover,
 .th-next:hover {
   background: var(--th-hover-bg);
+}
+
+/* "Sync to video time" — shown only while follow mode is off. */
+.th-sync {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  z-index: 5;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 18px;
+  background: var(--th-sync-bg);
+  color: var(--th-sync-fg);
+  font: 500 1.4rem/1 "Roboto", "Arial", sans-serif;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+.th-sync[hidden] {
+  display: none;
+}
+.th-sync:hover {
+  filter: brightness(0.9);
 }
 
 /* Ctrl+F reorder: #secondary is moved before #primary in the DOM while a transcript is

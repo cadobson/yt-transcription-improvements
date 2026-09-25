@@ -17,8 +17,9 @@ globalThis.TranscriptIndex = class TranscriptIndex {
   static PUNCTUATION = /[,.?!:;"“”„«»\-‐-―…()\[\]{}]/;
 
   /**
-   * @param {{item: Element, textEl: Element}[]} segments in document order.
-   *   `item` is the clickable row, `textEl` the element holding the fragment text.
+   * @param {{item: Element, textEl: Element, time?: number}[]} segments in document order.
+   *   `item` is the clickable row, `textEl` the element holding the fragment text, `time`
+   *   the fragment's start in seconds (passed through untouched).
    */
   constructor(segments) {
     this.segments = [];
@@ -34,7 +35,7 @@ globalThis.TranscriptIndex = class TranscriptIndex {
         this.nodes.push({ node, start: raw.length, end: raw.length + node.data.length, segIndex });
         raw += node.data;
       }
-      this.segments.push({ item: seg.item, textEl: seg.textEl, start, end: raw.length });
+      this.segments.push({ ...seg, start, end: raw.length });
     });
 
     this.raw = raw;
