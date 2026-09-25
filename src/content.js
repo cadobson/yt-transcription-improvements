@@ -1,16 +1,18 @@
-// Transcript Helper — Phase 0 content script.
-// Finds YouTube's transcript panel, marks it visibly, and logs its DOM structure so the
-// selectors in PLAN.md can be confirmed or corrected.
+// Transcript Helper — content script.
+// Finds YouTube's transcript panel, replaces its search box with our own toolbar, and
+// highlights matches in place (no filtering) with next/previous navigation.
 
 (() => {
   "use strict";
 
   const TAG = "[Transcript Helper]";
+  const DEBUG = true;
   const log = (...args) => console.log(TAG, ...args);
+  const debug = (...args) => DEBUG && console.log(TAG, ...args);
 
-  // YouTube currently ships two transcript implementations. "modern" is the redesigned
-  // panel (observed 2026-09-24 on Firefox 156); "classic" is the older Polymer one, kept
-  // as a fallback in case YouTube serves it on some videos or accounts.
+  // YouTube ships two transcript implementations. "modern" is the redesigned panel
+  // (observed 2026-09-24 on Firefox 156); "classic" is the older Polymer one, kept as a
+  // fallback in case YouTube serves it on some videos or accounts.
   const IMPLS = {
     modern: {
       panel: 'ytd-engagement-panel-section-list-renderer[target-id="PAmodern_transcript_view"]',
@@ -20,7 +22,6 @@
       text: "span.ytAttributedStringHost",
       activeItem: "macro-markers-panel-item-view-model[is-active]",
       searchBox: "yt-search-input-view-model",
-      searchInput: "yt-search-input-view-model textarea",
     },
     classic: {
       panel: 'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]',
@@ -30,7 +31,6 @@
       text: ".segment-text",
       activeItem: "ytd-transcript-segment-renderer.active",
       searchBox: "ytd-transcript-search-box-renderer",
-      searchInput: "ytd-transcript-search-box-renderer input",
     },
   };
   const PANEL_SELECTOR = Object.values(IMPLS).map((i) => i.panel).join(", ");
@@ -43,13 +43,7 @@
     return null;
   }
 
-  function isWatchPage() {
-    return location.pathname === "/watch";
-  }
-
-  // ---------------------------------------------------------------------------
-  // Probe: describe the panel so we can verify selectors from the console.
-  // ---------------------------------------------------------------------------
+  const isWatchPage = () => location.pathname === "/watch";
 
   function describe(el) {
     if (!el) return "(none)";
@@ -65,110 +59,250 @@
     return chain.reverse().join(" > ");
   }
 
-  function tree(el, depth, maxDepth, out, indent = "") {
-    if (depth > maxDepth) return;
-    const kids = [...el.children];
-    out.push(indent + describe(el) + (kids.length ? ` (${kids.length} children)` : ""));
-    let shown = 0;
-    for (const k of kids) {
-      if (shown >= 6) {
-        out.push(indent + "  ... " + (kids.length - shown) + " more");
-        break;
+  // ---------------------------------------------------------------------------
+  // Highlighting. Prefers the CSS Custom Highlight API (paints ranges without touching
+  // YouTube's DOM); falls back to wrapping matches in <mark> if it is unavailable.
+  // ---------------------------------------------------------------------------
+
+  const HAS_HIGHLIGHT_API = typeof Highlight === "function" && typeof CSS !== "undefined" && !!CSS.highlights;
+  if (!HAS_HIGHLIGHT_API) log("CSS Custom Highlight API unavailable; using <mark> fallback");
+
+  const highlighter = HAS_HIGHLIGHT_API
+    ? {
+        apply(matches, currentIndex) {
+          const all = [];
+          const current = [];
+          matches.forEach((m, i) => (i === currentIndex ? current : all).push(...m.ranges));
+          const hl = new Highlight(...all);
+          const cur = new Highlight(...current);
+          cur.priority = 1;
+          CSS.highlights.set("th-match", hl);
+          CSS.highlights.set("th-current", cur);
+        },
+        clear() {
+          CSS.highlights.delete("th-match");
+          CSS.highlights.delete("th-current");
+        },
       }
-      tree(k, depth + 1, maxDepth, out, indent + "  ");
-      shown++;
+    : {
+        marks: [],
+        apply(matches, currentIndex) {
+          this.clear();
+          // Wrap back-to-front so earlier ranges' offsets stay valid.
+          const jobs = [];
+          matches.forEach((m, i) => m.ranges.forEach((r) => jobs.push({ r, current: i === currentIndex })));
+          for (let i = jobs.length - 1; i >= 0; i--) {
+            const mark = document.createElement("mark");
+            mark.className = "th-mark" + (jobs[i].current ? " th-current" : "");
+            try {
+              jobs[i].r.surroundContents(mark);
+              this.marks.push(mark);
+            } catch (e) {
+              debug("could not wrap range", e);
+            }
+          }
+        },
+        clear() {
+          for (const mark of this.marks) {
+            if (!mark.isConnected) continue;
+            const parent = mark.parentNode;
+            while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+            mark.remove();
+            parent.normalize();
+          }
+          this.marks = [];
+        },
+      };
+
+  // ---------------------------------------------------------------------------
+  // One controller per transcript panel.
+  // ---------------------------------------------------------------------------
+
+  class TranscriptPanel {
+    constructor(panel, impl) {
+      this.panel = panel;
+      this.impl = impl;
+      this.index = null;
+      this.matches = [];
+      this.current = -1;
+      this.query = "";
+      this.rebuildTimer = null;
+      this.searchTimer = null;
     }
-  }
 
-  function probe(panel, impl, reason) {
-    const segments = panel.querySelectorAll(impl.segment);
-    const searchBox = panel.querySelector(impl.searchBox);
-    const first = segments[0];
-    const activeItem = panel.querySelector(impl.activeItem);
+    mount() {
+      this.panel.setAttribute("data-th-active", this.impl.name);
+      this.buildToolbar();
+      this.mountToolbar();
+      this.rebuild();
 
-    console.groupCollapsed(`${TAG} probe (${reason}, ${impl.name}) — ${segments.length} segments`);
-    log("panel attributes:", Object.fromEntries([...panel.attributes].map((a) => [a.name, a.value])));
-    log("ancestor chain:", ancestorChain(panel));
-    log("rendered size:", panel.offsetWidth + "x" + panel.offsetHeight);
-    const lines = [];
-    tree(panel, 0, 5, lines);
-    log("structure:\n" + lines.join("\n"));
-    log("search box:", searchBox ? searchBox.outerHTML.slice(0, 1500) : "(not found)");
-    log("search input:", describe(panel.querySelector(impl.searchInput)));
-    if (first) {
-      const item = first.closest(impl.item);
-      log("first item:", item ? item.outerHTML.slice(0, 1500) : "(no item wrapper)");
-      log("first timestamp:", first.querySelector(impl.timestamp)?.textContent.trim());
-      log("first text:", first.querySelector(impl.text)?.textContent.trim());
-      // What else lives alongside segments? (chapter headers, ads, etc.)
-      const listParent = item?.parentElement?.parentElement;
-      if (listParent) {
-        const kinds = new Map();
-        for (const child of listParent.children) {
-          const key = describe(child) + " > " + describe(child.firstElementChild);
-          kinds.set(key, (kinds.get(key) || 0) + 1);
+      this.observer = new MutationObserver((records) => {
+        // Ignore mutations we caused ourselves inside the toolbar.
+        if (records.every((r) => this.toolbar.contains(r.target))) return;
+        clearTimeout(this.rebuildTimer);
+        this.rebuildTimer = setTimeout(() => {
+          if (!this.toolbar.isConnected) this.mountToolbar();
+          this.rebuild();
+        }, 150);
+      });
+      this.observer.observe(this.panel, { subtree: true, childList: true, characterData: true });
+      log(`${this.impl.name} panel mounted`);
+    }
+
+    buildToolbar() {
+      const bar = document.createElement("div");
+      bar.className = "th-toolbar";
+      bar.setAttribute("role", "search");
+      bar.innerHTML = `
+        <input class="th-input" type="text" placeholder="Search transcript"
+               aria-label="Search transcript" autocomplete="off" spellcheck="false">
+        <span class="th-count" aria-live="polite"></span>
+        <button class="th-prev" type="button" title="Previous match (Shift+Enter)" aria-label="Previous match">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M7.4 15.4 12 10.8l4.6 4.6L18 14l-6-6-6 6z"/></svg>
+        </button>
+        <button class="th-next" type="button" title="Next match (Enter)" aria-label="Next match">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z"/></svg>
+        </button>`;
+      this.toolbar = bar;
+      this.input = bar.querySelector(".th-input");
+      this.count = bar.querySelector(".th-count");
+
+      // Keep YouTube's page-wide hotkeys (space, k, f, arrows...) from firing while typing.
+      for (const type of ["keydown", "keyup", "keypress"]) {
+        bar.addEventListener(type, (e) => e.stopPropagation());
+      }
+      this.input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          this.step(e.shiftKey ? -1 : 1);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          this.input.value = "";
+          this.search("");
+          this.input.blur();
         }
-        log("list container:", describe(listParent), "child kinds:", Object.fromEntries(kinds));
-      }
-    } else {
-      log("first segment: (not found)");
+      });
+      this.input.addEventListener("input", () => {
+        clearTimeout(this.searchTimer);
+        this.searchTimer = setTimeout(() => this.search(this.input.value), 80);
+      });
+      bar.querySelector(".th-prev").addEventListener("click", () => this.step(-1));
+      bar.querySelector(".th-next").addEventListener("click", () => this.step(1));
     }
-    log("active item:", activeItem ? activeItem.querySelector(impl.text)?.textContent.trim() : "(none)");
-    const video = document.querySelector("video.html5-main-video");
-    log("video element:", video ? `${describe(video)} currentTime=${video.currentTime.toFixed(1)}` : "(not found)");
-    console.groupEnd();
+
+    mountToolbar() {
+      const box = this.panel.querySelector(this.impl.searchBox);
+      if (box) {
+        box.insertAdjacentElement("beforebegin", this.toolbar);
+      } else {
+        // Search box not rendered (yet); a later mutation will retry via mountToolbar().
+        debug("search box not found; toolbar not mounted yet");
+      }
+    }
+
+    collectSegments() {
+      const segs = [];
+      for (const seg of this.panel.querySelectorAll(this.impl.segment)) {
+        const textEl = seg.querySelector(this.impl.text);
+        if (!textEl) continue;
+        segs.push({ item: seg.closest(this.impl.item) || seg, textEl });
+      }
+      return segs;
+    }
+
+    rebuild() {
+      highlighter.clear();
+      this.index = new TranscriptIndex(this.collectSegments());
+      debug(`index rebuilt: ${this.index.segments.length} segments, ${this.index.raw.length} chars`);
+      this.runQuery({ scroll: false });
+    }
+
+    search(query) {
+      this.query = query;
+      this.runQuery({ scroll: true });
+    }
+
+    runQuery({ scroll }) {
+      this.matches = this.index ? this.index.find(this.query) : [];
+      this.current = this.matches.length ? 0 : -1;
+      this.render();
+      if (scroll) this.scrollToCurrent();
+    }
+
+    step(delta) {
+      if (!this.matches.length) return;
+      this.current = (this.current + delta + this.matches.length) % this.matches.length;
+      this.render();
+      this.scrollToCurrent();
+    }
+
+    render() {
+      if (!this.matches.length) {
+        highlighter.clear();
+        this.count.textContent = this.query.trim() ? "No matches" : "";
+        this.toolbar.classList.toggle("th-no-matches", !!this.query.trim());
+        return;
+      }
+      this.toolbar.classList.remove("th-no-matches");
+      highlighter.apply(this.matches, this.current);
+      this.count.textContent = `${this.current + 1} / ${this.matches.length}`;
+    }
+
+    scrollToCurrent() {
+      const m = this.matches[this.current];
+      if (!m) return;
+      const item = this.index.segments[m.segIndices[0]].item;
+      const container = this.scrollContainer(item);
+      if (!container) {
+        item.scrollIntoView({ block: "center", behavior: "smooth" });
+        return;
+      }
+      const cr = container.getBoundingClientRect();
+      const ir = item.getBoundingClientRect();
+      const top = container.scrollTop + (ir.top - cr.top) - (cr.height - ir.height) / 2;
+      container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    }
+
+    scrollContainer(el) {
+      for (let n = el.parentElement; n && n !== this.panel.parentElement; n = n.parentElement) {
+        const oy = getComputedStyle(n).overflowY;
+        if ((oy === "auto" || oy === "scroll") && n.scrollHeight > n.clientHeight) return n;
+      }
+      return null;
+    }
+
+    destroy() {
+      this.observer?.disconnect();
+      highlighter.clear();
+      this.toolbar.remove();
+    }
   }
 
   // ---------------------------------------------------------------------------
-  // Panel setup
+  // Discovery
   // ---------------------------------------------------------------------------
 
-  const knownPanels = new Set();
-
-  function setupPanel(panel) {
-    if (knownPanels.has(panel)) return;
-    const impl = implFor(panel);
-    if (!impl) return;
-    knownPanels.add(panel);
-
-    panel.setAttribute("data-th-active", impl.name);
-    if (!panel.querySelector(".th-badge")) {
-      const badge = document.createElement("span");
-      badge.className = "th-badge";
-      badge.textContent = "Transcript Helper";
-      panel.appendChild(badge);
-    }
-    log(`${impl.name} panel found; visibility =`, panel.getAttribute("visibility"));
-    probe(panel, impl, "initial");
-
-    // Log when the panel opens/closes and when the segment list is rebuilt.
-    let lastCount = panel.querySelectorAll(impl.segment).length;
-    let timer = null;
-    new MutationObserver((records) => {
-      for (const r of records) {
-        if (r.type === "attributes" && r.target === panel && r.attributeName === "visibility") {
-          log(`${impl.name} panel visibility ->`, panel.getAttribute("visibility"),
-            "| segments:", panel.querySelectorAll(impl.segment).length);
-        }
-      }
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        const count = panel.querySelectorAll(impl.segment).length;
-        if (count !== lastCount) {
-          lastCount = count;
-          probe(panel, impl, "segments changed");
-        }
-      }, 300);
-    }).observe(panel, { subtree: true, childList: true, attributes: true, attributeFilter: ["visibility"] });
-  }
+  const controllers = new Map(); // panel element -> TranscriptPanel
 
   function scan() {
     if (!isWatchPage()) return;
-    for (const p of knownPanels) if (!p.isConnected) knownPanels.delete(p);
-    document.querySelectorAll(PANEL_SELECTOR).forEach(setupPanel);
+    for (const [panel, ctl] of controllers) {
+      if (!panel.isConnected) {
+        ctl.destroy();
+        controllers.delete(panel);
+      }
+    }
+    for (const panel of document.querySelectorAll(PANEL_SELECTOR)) {
+      if (controllers.has(panel)) continue;
+      const impl = implFor(panel);
+      if (!impl) continue;
+      const ctl = new TranscriptPanel(panel, impl);
+      controllers.set(panel, ctl);
+      ctl.mount();
+    }
     // Segments rendered outside any known panel would mean our panel selector is wrong.
     const stray = [...document.querySelectorAll(ANY_SEGMENT_SELECTOR)].find(
-      (seg) => ![...knownPanels].some((p) => p.contains(seg))
+      (seg) => ![...controllers.keys()].some((p) => p.contains(seg))
     );
     if (stray && !stray.dataset.thStrayLogged) {
       stray.dataset.thStrayLogged = "1";
@@ -189,7 +323,7 @@
   }).observe(document.documentElement, { subtree: true, childList: true });
 
   document.addEventListener("yt-navigate-finish", () => {
-    log("yt-navigate-finish", location.href);
+    debug("yt-navigate-finish", location.href);
     scan();
   });
 

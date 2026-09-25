@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Transcript Helper",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Better search and Ctrl+F behaviour for YouTube's video transcript panel.",
   "browser_specific_settings": {
     "gecko": {
@@ -11,9 +11,16 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*"],
-      "js": ["src/content.js"],
-      "css": ["src/styles.css"],
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "src/transcript-index.js",
+        "src/content.js"
+      ],
+      "css": [
+        "src/styles.css"
+      ],
       "run_at": "document_idle"
     }
   ]
