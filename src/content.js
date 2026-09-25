@@ -161,6 +161,10 @@
         }, 150);
       });
       this.observer.observe(this.panel, { subtree: true, childList: true, characterData: true });
+
+      // Opening/closing the panel drives the Ctrl+F column reorder.
+      this.visibilityObserver = new MutationObserver(() => layout.update());
+      this.visibilityObserver.observe(this.panel, { attributes: true, attributeFilter: ["visibility"] });
       const copies = [...document.querySelectorAll(this.impl.panel)];
       log(`${this.impl.name} panel mounted (copy ${copies.indexOf(this.panel) + 1} of ${copies.length}) at`,
         ancestorChain(this.panel.parentElement));
@@ -285,6 +289,11 @@
       container.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
     }
 
+    scrollContainerOfPanel() {
+      const seg = this.index?.segments[0]?.item;
+      return seg ? this.scrollContainer(seg) : null;
+    }
+
     scrollContainer(el) {
       for (let n = el.parentElement; n && n !== this.panel.parentElement; n = n.parentElement) {
         const oy = getComputedStyle(n).overflowY;
@@ -293,13 +302,67 @@
       return null;
     }
 
+    isOpen() {
+      return this.panel.isConnected && this.panel.getAttribute("visibility") === "ENGAGEMENT_PANEL_VISIBILITY_EXPANDED";
+    }
+
     destroy() {
       this.observer?.disconnect();
+      this.visibilityObserver?.disconnect();
       this.matches = [];
       this.toolbar.remove();
       refreshHighlights();
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Ctrl+F: put the transcript ahead of the primary column in DOM order.
+  //
+  // Find-in-page walks the DOM in order, and #secondary (which holds the transcript panel)
+  // comes after #primary (player, description, comments). While a transcript panel is
+  // open in the two-column layout, #secondary is moved before #primary and CSS `order`
+  // keeps the visual layout unchanged. #primary is never moved: it contains the <video>
+  // element, and moving a media element in the DOM pauses it.
+  // ---------------------------------------------------------------------------
+
+  const layout = {
+    logged: false,
+    update() {
+      const flexy = document.querySelector("ytd-watch-flexy");
+      const columns = flexy?.querySelector(":scope > #columns");
+      const primary = columns?.querySelector(":scope > #primary");
+      const secondary = columns?.querySelector(":scope > #secondary");
+      if (!primary || !secondary) return;
+
+      if (!this.logged) {
+        this.logged = true;
+        debug("ytd-watch-flexy attributes:", [...flexy.attributes].map((a) => a.name).join(" "));
+      }
+
+      const transcriptOpen = [...controllers.values()].some((c) => c.isOpen());
+      const twoColumns = flexy.hasAttribute("is-two-columns_");
+      const want = isWatchPage() && transcriptOpen && twoColumns;
+      const secondaryFirst = !!(secondary.compareDocumentPosition(primary) & Node.DOCUMENT_POSITION_FOLLOWING);
+      if (want === secondaryFirst) return;
+
+      // Moving #secondary collapses highlight Ranges inside it and can reset scroll
+      // positions, so capture and restore around the move.
+      const scrolls = [...controllers.values()].map((c) => {
+        const el = c.scrollContainerOfPanel();
+        return el ? { el, top: el.scrollTop } : null;
+      });
+      if (want) {
+        columns.insertBefore(secondary, primary);
+        flexy.setAttribute("data-th-reordered", "");
+      } else {
+        columns.insertBefore(primary, secondary);
+        flexy.removeAttribute("data-th-reordered");
+      }
+      for (const s of scrolls) if (s) s.el.scrollTop = s.top;
+      for (const c of controllers.values()) c.runQuery({ scroll: false });
+      debug(want ? "moved #secondary before #primary" : "restored #primary before #secondary");
+    },
+  };
 
   // ---------------------------------------------------------------------------
   // Discovery
@@ -329,6 +392,20 @@
       stray.dataset.thStrayLogged = "1";
       log("WARNING: segment found outside known panels:", ancestorChain(stray));
     }
+    layout.update();
+    watchFlexy();
+  }
+
+  // Layout mode changes (two-column vs stacked, theater) are attributes on ytd-watch-flexy.
+  let watchedFlexy = null;
+  function watchFlexy() {
+    const flexy = document.querySelector("ytd-watch-flexy");
+    if (!flexy || flexy === watchedFlexy) return;
+    watchedFlexy = flexy;
+    new MutationObserver(() => layout.update()).observe(flexy, {
+      attributes: true,
+      attributeFilter: ["is-two-columns_", "theater", "fullscreen", "hidden"],
+    });
   }
 
   // Panels can be created lazily, so watch the whole document. Scans are coalesced to

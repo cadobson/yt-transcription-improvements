@@ -87,6 +87,20 @@ html[dark] .th-toolbar {
   background: var(--th-hover-bg);
 }
 
+/* Ctrl+F reorder: #secondary is moved before #primary in the DOM while a transcript is
+   open; flex order keeps the primary column visually first. */
+ytd-watch-flexy[data-th-reordered] #columns > #primary {
+  order: 0 !important;
+}
+ytd-watch-flexy[data-th-reordered] #columns > #secondary {
+  order: 1 !important;
+  /* #primary now comes later in the DOM, so it would paint over #secondary (the ambient
+     "glow" canvas bleeds across). Lift #secondary above it. Flex items honor z-index
+     without being positioned; do NOT add position: relative, that triggers a YouTube
+     offset rule and pushes the column off-screen. */
+  z-index: 1;
+}
+
 /* Match highlighting (CSS Custom Highlight API) */
 ::highlight(th-match) {
   background-color: rgba(255, 214, 0, 0.45);

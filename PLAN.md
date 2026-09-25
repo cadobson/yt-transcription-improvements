@@ -104,7 +104,7 @@ unaffected. Target browser is Firefox 156 (user's version, 2026-09-24), which su
 - Edge cases: chapter headers between segments, queries spanning three or more segments,
   double spaces / line breaks inside segment text.
 
-### Phase 3 — Punctuation-insensitive search  🔨 built 2026-09-24, awaiting verification
+### Phase 3 — Punctuation-insensitive search  ✅ verified 2026-09-24
 - Add normalized matching (commas first; configurable set of punctuation).
 - Present both result kinds: exact matches and punctuation-insensitive matches in one
   merged, ordered list, visually distinguished (e.g. solid vs. dashed underline / different
@@ -116,7 +116,7 @@ unaffected. Target browser is Firefox 156 (user's version, 2026-09-24), which su
 - Presentation: loose-only matches get a dashed underline on top of the normal highlight;
   the counter's tooltip gives the exact/loose breakdown.
 
-### Phase 4 — Ctrl+F reaches the transcript first
+### Phase 4 — Ctrl+F reaches the transcript first  🔨 built 2026-09-24, awaiting verification
 Decision (2026-09-24): **DOM reorder.** Native Ctrl+F stays untouched; users are never
 forced into our search box.
 Confirmed layout: both implementations mount the panel in
@@ -126,8 +126,12 @@ holds `#primary` (player, description, comments) before `#secondary`. Plan: move
 the visual order with CSS `order` on the two columns (flex `order` works in both the
 side-by-side and the stacked theater layout). Find-in-page then visits the transcript
 (and the related-videos list, which shares `#secondary`) before the primary column.
-Open question: the census showed a second classic panel copy; find where it lives before
-moving anything.
+Resolved: clicking "Show transcript" on a chaptered video creates a second classic panel
+copy in the same `#panels` container, so one container covers both.
+Implementation: `layout.update()` in `src/content.js` moves `#secondary` only while a
+panel is open AND `ytd-watch-flexy[is-two-columns_]` is set (stacked narrow layout is left
+alone), restores otherwise, and re-runs every search afterwards because moving a subtree
+collapses the highlight Ranges inside it.
 Rejected: intercepting Ctrl+F to focus our toolbar. Not tried: the selection trick.
 
 ### Later / out of scope for now
